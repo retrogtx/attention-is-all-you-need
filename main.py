@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-class SelfAttention(nn.module):
+class SelfAttention(nn.Module):  # Fixed typo: nn.module -> nn.Module
     def __init__(self, embed_size, heads):
         super(SelfAttention, self).__init__()
         self.embed_size = embed_size
@@ -18,32 +18,34 @@ class SelfAttention(nn.module):
         self.queries = nn.Linear(self.head_dim, self.head_dim, bias=False)
         self.fc_out = nn.Linear(heads * self.head_dim, embed_size)
 
+    def forward(self, values, keys, query, mask):
+        N = query.shape[0]
+        value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
 
-def forward(self, values, keys, query, mask):
-    N = query.shape[0]
-    value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
+        values = values.reshape(N, value_len, self.heads, self.head_dim)
+        keys = keys.reshape(N, key_len, self.heads, self.head_dim)
+        query = query.reshape(
+            N, query_len, self.heads, self.head_dim
+        )  # Fixed variable name: queries -> query
 
-    values = values.reshape(N, value_len, self.heads, self.head_dim)
-    keys = keys.reshape(N, key_len, self.heads, self.head_dim)
-    queries = queries.reshape(N, query_len, self.heads, self.head_dim)
+        energy = torch.einsum(
+            "nqhd,nkhd->nhqk", [query, keys]
+        )  # Fixed variable name: queries -> query
 
-    energy = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
+        if mask is not None:
+            energy = energy.masked_fill(mask == 0, float("-1e20"))
 
-    if mask is not None:
-        energy = energy.masked_fill(mask == 0, float("-1e20"))
+        attention = torch.softmax(energy / (self.embed_size ** (1 / 2)), dim=3)
 
-    # trying to underestand the softmax here, will implement soon
-    attention = torch.softmax(energy / (self.embed_size ** (1 / 2)), dim=3)
+        out = torch.einsum("nhql,nlhd->nqhd", [attention, values]).reshape(
+            N, query_len, self.heads * self.head_dim
+        )
 
-    out = torch.einsum("nhql,nlhd->nqhd", [attention, values]).reshape(
-        N, query_len, self.heads * self.head_dim
-    )
-
-    out = self.fc_out(out)
-    return out
+        out = self.fc_out(out)
+        return out
 
 
-class TransformerBlock(nn.module):
+class TransformerBlock(nn.Module):  # Fixed typo: nn.module -> nn.Module
     def __init__(self, embed_size, heads, dropout, forward_expansion):
         super(TransformerBlock, self).__init__()
         self.attention = SelfAttention(embed_size, heads)
@@ -65,7 +67,7 @@ class TransformerBlock(nn.module):
         return out
 
 
-class Encoder(nn.module):
+class Encoder(nn.Module):  # Fixed typo: nn.module -> nn.Module
     def __init__(
         self,
         src_vocab_size,
@@ -108,24 +110,32 @@ class Encoder(nn.module):
         return out
 
 
-class Decoder(nn.module):
-    def __init__(self, embed_size, heads, forward_expansion, dropout, device):
-        super(Decoder, self).__init__()
+class DecoderBlock(nn.Module):  # Renamed from Decoder to DecoderBlock
+    def __init__(self, embed_size, heads, dropout, forward_expansion):
+        super(DecoderBlock, self).__init__()
         self.attention = SelfAttention(embed_size, heads)
-        self.norm = nn.LayerNorm(embed_size)
-        self.transformer_block = TransformerBlock(
+        self.norm1 = nn.LayerNorm(embed_size)
+        self.norm2 = nn.LayerNorm(embed_size)
+        self.norm3 = nn.LayerNorm(embed_size)  # Added layer normalization
+        self.transformer_block1 = TransformerBlock(
+            embed_size, heads, dropout, forward_expansion
+        )
+        self.transformer_block2 = TransformerBlock(
             embed_size, heads, dropout, forward_expansion
         )
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, value, key, src_mask, trg_mask):
+    def forward(self, x, enc_out, src_mask, trg_mask):
         attention = self.attention(x, x, x, trg_mask)
         query = self.dropout(self.norm1(attention + x))
-        out = self.transformer_block(value, key, query, src_mask)
+        out = self.transformer_block1(enc_out, enc_out, query, src_mask)
+        out = self.dropout(self.norm2(out + query))
+        out = self.transformer_block2(out, enc_out, enc_out, src_mask)
+        out = self.dropout(self.norm3(out + query))
         return out
 
 
-class Decoder(nn.module):
+class Decoder(nn.Module):  # Renamed from Decoder to Decoder
     def __init__(
         self,
         trg_vocab_size,
@@ -163,12 +173,13 @@ class Decoder(nn.module):
         x = self.dropout(self.word_embedding(x) + self.position_embedding(positions))
 
         for layer in self.layers:
-            x = layer(x, enc_out, enc_out, src_mask, trg_mask)
+            x = layer(x, enc_out, src_mask, trg_mask)
 
         out = self.fc_out(x)
+        return out
 
 
-class Transformer(nn.module):
+class Transformer(nn.Module):
     def __init__(
         self,
         src_vocab_size,
